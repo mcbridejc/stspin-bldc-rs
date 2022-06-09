@@ -25,18 +25,10 @@ port = serial.Serial(PORT, baudrate=9600, timeout=1)
 
 while True:
     time.sleep(2.0)
-    msg = build_message(0, struct.pack("<l", 1000))
+    msg = build_message(0, struct.pack("<l", 0))
     print(f"Sending {msg}")
-    port.flushInput()
     port.write(msg)
-    rx = port.read(len(msg))
-    print(f"Rx    : {rx}")
     time.sleep(2.0)
     msg = build_message(0, struct.pack("<l", 3000))
-    print(f"sendind {msg}")
-    port.flushInput()
+    print(f"sending {msg}")
     port.write(msg)
-    rx = port.read(len(msg))
-    print(f"Rx    : {rx}")
-    
-

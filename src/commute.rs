@@ -62,6 +62,7 @@ pub struct PwmEnableControl {
     tim: *const TimRegs
 }
 
+// Needed for RTIC to pass the *const pointer to an interrupt
 unsafe impl Send for PwmEnableControl {}
 
 impl PwmEnableControl {
@@ -70,13 +71,11 @@ impl PwmEnableControl {
         // one of these, and modifying the register isn't atomic.
         // It would be better to figure out how to ensure that only one PwmEnableControl
         // can exist at once. Right now though I'm satisfied that I will only create one.
-        unsafe {
-            let tim = &(*self.tim);
-            if enable {
-                tim.bdtr.modify(|_, w| w.moe().set_bit());
-            } else {
-                tim.bdtr.modify(|_, w| w.moe().clear_bit());
-            }
+        let tim = unsafe { &(*self.tim) };
+        if enable {
+            tim.bdtr.modify(|_, w| w.moe().set_bit());
+        } else {
+            tim.bdtr.modify(|_, w| w.moe().clear_bit());
         }
     }
 }
@@ -135,15 +134,16 @@ impl PwmDriver {
         self.tim.ccr3.write(|w| w.ccr().bits((self.sine_table[s2 as usize] as u32 * power / 128) as u16));
     }
 
-    /// Get a PwmEnableControl which allows toggling the output enable without holding a
-    /// mut reference to the PwmDriver. This was done because I don't want the interrupt
-    /// which updates MOE to block the commutation interrupt. It's not necessary to lock
-    /// while writing MOE, as long as no other process is also using BDTR.
+    /// Get a PwmEnableControl which allows toggling the output enable without holding a mut
+    /// reference to the PwmDriver. 
+    /// 
+    /// This was done because I don't want the interrupt which updates MOE to block the commutation
+    /// interrupt. It's not necessary to lock while writing MOE, as long as no other process is also
+    /// using BDTR.
     ///
-    /// I assume it's possible somehow to borrow jsut the BDTR register in a way that
-    /// ensures only one owner can hold it, but frankly just figuring out how to
-    /// split this off was enough of a chore for one trivial register write and
-    /// I am done with this at least for today.
+    /// I assume it's possible somehow to borrow just the BDTR register in a way that ensures only
+    /// one owner can hold it, but frankly just figuring out how to split this off was enough of a
+    /// chore for one trivial register write and I am done with this at least for today.
     pub fn split_enabler(&self) -> PwmEnableControl {
         PwmEnableControl { tim: core::ptr::addr_of!(self.tim) }
     }
