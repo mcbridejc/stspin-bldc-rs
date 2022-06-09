@@ -1,0 +1,55 @@
+{
+    /* 
+     * Requires the Rust Language Server (RLS) and Cortex-Debug extensions
+     * https://marketplace.visualstudio.com/items?itemName=rust-lang.rust
+     * https://marketplace.visualstudio.com/items?itemName=marus25.cortex-debug
+     */
+    "version": "0.2.0",
+    "configurations": [
+        // {
+        //     "type": "cortex-debug",
+        //     "request": "launch",
+        //     "name": "Debug (QEMU)",
+        //     "servertype": "qemu",
+        //     "cwd": "${workspaceRoot}",
+        //     "preLaunchTask": "Cargo Build (debug)",
+        //     "runToMain": true,
+        //     "executable": "./target/thumbv6m-none-eabi/debug/spincontrol",
+        //     /* Run `cargo build --example hello` and uncomment this line to run semi-hosting example */
+        //     //"executable": "./target/thumbv7m-none-eabi/debug/examples/hello",
+        //     "cpu": "cortex-m3",
+        //     "machine": "lm3s6965evb",
+        // },
+        {
+            /* Configuration for the STM32F303 Discovery board */
+            "type": "cortex-debug",
+            "request": "launch",
+            "name": "Debug (OpenOCD)",
+            //"servertype": "openocd",
+            "servertype": "external",
+            "gdbTarget": "localhost:3333",
+            "cwd": "${workspaceRoot}",
+            "preLaunchTask": "Cargo Build (debug)",
+            "showDevDebugOutput": true,
+            "runToMain": true,
+            "executable": "./target/thumbv6m-none-eabi/debug/spincontrol",
+            /* Run `cargo build --example itm` and uncomment this line to run itm example */
+            // "executable": "./target/thumbv7em-none-eabihf/debug/examples/itm",
+            "device": "STM32F031",
+            "configFiles": [
+                "interface/stlink-v2-1.cfg",
+                "target/stm32f0x.cfg"
+            ],
+            "svdFile": "${workspaceRoot}/.vscode/STM32F0x1.svd",
+            // "swoConfig": {
+            //     "enabled": true,
+            //     "cpuFrequency": 48000000,
+            //     "swoFrequency": 2000000,
+            //     "source": "probe",
+            //     "decoders": [
+            //         { "type": "console", "label": "ITM", "port": 0 }
+            //     ]
+            // }
+        }
+    ]
+}
