@@ -6,24 +6,80 @@ use core::sync::atomic;
 type TimRegs = hal::stm32::TIM1;
 
 // Number of sine commutation steps each electrical cycle
-const COMM_STEPS: usize = 30;
+pub const COMM_STEPS: usize = 30;
 // Maximum acceleration
 const ACCEL: f32 = 2800.; // RPM per second (electrical!)
 // Scale factor used for fixed point calculation
-const SPEED_SCALE: i32 = 100;
+pub const SPEED_SCALE: i32 = 100;
 // Sets the frequency of the PWM output
 // The counter runs at 48MHz, so the pwm frequency is 48MHz/RELOAD.
 const RELOAD: u32 = 1600;
 // Sets the maximum output duty cycle (i.e. motor voltage)
 const MAXDRIVE: f32 = 0.25;
-// The minimum commutation step frequency before the motor is shut off.
-pub const MIN_COMMUTATE_HZ: u32 = 10;
+// The minimum speed before the motor is shut off.
+pub const MIN_SPEED: i32 = 35;
+// Sets the delay between turning the FETs on and beginning acceleration. This creates a more
+// reliable startup by allowing the stator to align with the commutation angle and settle
+pub const ENABLE_DELAY_US: u32 = 750_000;
 
 #[derive(Default)]
 pub struct MotorState {
-    pub cur_speed: atomic::AtomicI32, // RPS * SPEED_SCALE
-    pub cmd_speed: atomic::AtomicI32, // RPS * SPEED_SCALE
-    pub accelerating: atomic::AtomicBool,
+    cur_speed: atomic::AtomicI32, // RPS * SPEED_SCALE
+    cmd_speed: atomic::AtomicI32, // RPS * SPEED_SCALE
+    accelerating: atomic::AtomicBool,
+    enabled_count: atomic::AtomicU32,
+}
+
+impl MotorState {
+    pub fn fets_enabled(&self) -> bool {
+        self.enabled_count.load(atomic::Ordering::Relaxed) > 0
+    }
+
+    pub fn accelerating(&self) -> bool {
+        self.accelerating.load(atomic::Ordering::Relaxed)
+    }
+
+    pub fn cur_speed(&self) -> i32 {
+        self.cur_speed.load(atomic::Ordering::Relaxed)
+    }
+
+    pub fn cmd_speed(&self) -> i32 {
+        self.cmd_speed.load(atomic::Ordering::Relaxed)
+    }
+
+    pub fn set_cmd_speed(&self, val: i32) {
+        self.cmd_speed.store(val, atomic::Ordering::Relaxed);
+    }
+
+    pub fn compute_new_state(&self, period_us: u32) {
+        // Convert RPM/s to RPS scaled units
+        const ACCEL_PER_S: u32 = (ACCEL * SPEED_SCALE as f32 / 60.) as u32;
+        let max_accel = max(ACCEL_PER_S * period_us / 1000000, 1);
+        let cmd_speed = self.cmd_speed();
+        let cur_speed = self.cur_speed();
+        let enabled_count = self.enabled_count.load(atomic::Ordering::Relaxed);
+        let ds = min(max_accel, (cmd_speed - cur_speed).abs() as u32);
+
+        if enabled_count < ENABLE_DELAY_US {
+            // We're not enabled, but now we should be
+            if cmd_speed.abs() > 0 {
+                self.enabled_count.store(enabled_count + period_us,atomic::Ordering::Relaxed);
+            }
+        } else if cur_speed.abs() < MIN_SPEED && cmd_speed.abs() < MIN_SPEED {
+            // Switch to disabled
+            self.enabled_count.store(0, atomic::Ordering::Relaxed);
+        } else {
+            if cmd_speed > cur_speed {
+                self.cur_speed.store(cur_speed + ds as i32, atomic::Ordering::Relaxed);
+                self.accelerating.store(true, atomic::Ordering::Relaxed);
+            } else if cmd_speed < cur_speed {
+                self.cur_speed.store(cur_speed - ds as i32, atomic::Ordering::Relaxed);
+                self.accelerating.store(true, atomic::Ordering::Relaxed);
+            } else {
+                self.accelerating.store(false,atomic::Ordering::Relaxed);
+            }
+        }
+    }
 }
 
 // TODO: Configurable control parameters
@@ -32,25 +88,6 @@ pub struct MotorState {
 //     accel_per_ms: u32, // RPS * SPEED_SCALE / ms
 //     max_voltage: f32, // Duty cycle [0..1]
 // }
-
-/// Computes a new speed applying acceleration limits
-pub fn compute_new_speed(state: &MotorState, period_us: u32) {
-    // Convert RPM/s to RPS scaled units
-    const ACCEL_PER_S: u32 = (ACCEL * SPEED_SCALE as f32 / 60.) as u32;
-    let max_accel = max(ACCEL_PER_S * period_us / 1000000, 1);
-    let cmd_speed = state.cmd_speed.load(atomic::Ordering::Relaxed);
-    let cur_speed = state.cur_speed.load(atomic::Ordering::Relaxed);
-    let ds = min(max_accel, (cmd_speed - cur_speed).abs() as u32);
-    if cmd_speed > cur_speed {
-        state.cur_speed.store(cur_speed + ds as i32, atomic::Ordering::Relaxed);
-        state.accelerating.store(true, atomic::Ordering::Relaxed);
-    } else if cmd_speed < cur_speed {
-        state.cur_speed.store(cur_speed - ds as i32, atomic::Ordering::Relaxed);
-        state.accelerating.store(true, atomic::Ordering::Relaxed);
-    } else {
-        state.accelerating.store(false,atomic::Ordering::Relaxed);
-    }
-}
 
 pub struct PwmDriver {
     tim: TimRegs,
@@ -135,8 +172,8 @@ impl PwmDriver {
     }
 
     /// Get a PwmEnableControl which allows toggling the output enable without holding a mut
-    /// reference to the PwmDriver. 
-    /// 
+    /// reference to the PwmDriver.
+    ///
     /// This was done because I don't want the interrupt which updates MOE to block the commutation
     /// interrupt. It's not necessary to lock while writing MOE, as long as no other process is also
     /// using BDTR.

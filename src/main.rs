@@ -18,7 +18,6 @@ mod periodic_timer;
 mod app {
     use systick_monotonic::*;
 
-    use core::sync::atomic;
     use stm32f0xx_hal as hal;
     use stm32f0xx_hal::pac as pac;
     use hal::prelude::*;
@@ -29,8 +28,7 @@ mod app {
     use cortex_m_semihosting::hprintln;
 
     use crate::commute;
-    use crate::commute::PwmEnableControl;
-    use crate::commute::{compute_new_speed, PwmDriver, MotorState};
+    use crate::commute::{PwmDriver, PwmEnableControl, MotorState};
     use crate::parser::Parser;
     use crate::periodic_timer::PeriodicTimer;
 
@@ -178,7 +176,7 @@ mod app {
                         match parser.packet.id {
                             0 => {
                                 let motor_speed = read_i32(&parser.packet.data[0..4]);
-                                motor_state.cmd_speed.store(motor_speed, atomic::Ordering::Relaxed);
+                                motor_state.set_cmd_speed(motor_speed);
                             },
                             _ => { hprintln!("Bad packet").unwrap(); }
                         }
@@ -235,10 +233,10 @@ mod app {
 
         let mut pwm_driver = cx.shared.pwm_driver;
         let motor_state = cx.shared.motor_state;
-        let accelerating = motor_state.accelerating.load(atomic::Ordering::Relaxed);
-        let cur_speed = motor_state.cur_speed.load(atomic::Ordering::Relaxed);
+        let cur_speed = motor_state.cur_speed();
+
         pwm_driver.lock(|pwm_driver| {
-            let power = if accelerating {128} else {64};
+            let power = if motor_state.accelerating() {128} else {64};
             if cur_speed > 0 {
                 pwm_driver.step(false, power);
             } else {
@@ -257,17 +255,18 @@ mod app {
         let mut commutation_timer = cx.shared.commutation_timer;
         let pwm_enable = cx.local.pwm_enable;
 
-        compute_new_speed(motor_state,  1_000_000 / SPEED_CONTROL_FREQ);
-        let cur_speed = motor_state.cur_speed.load(atomic::Ordering::Relaxed);
-        let timer_hz = core::cmp::max(cast::u32(cur_speed * 30 / 100).unwrap(), 5);
+        motor_state.compute_new_state(1_000_000 / SPEED_CONTROL_FREQ);
+        let cur_speed = motor_state.cur_speed();
+        // Convert to a timer tick frequency, but never set it to zero. We need to keep a minimum
+        // timer frequency to maintain responsiveness, because timer updates only happen on overflow
+        let timer_hz = core::cmp::max(
+            cur_speed.abs() as u32 * commute::COMM_STEPS as u32 / commute::SPEED_SCALE as u32,
+            commute::MIN_SPEED as u32 * commute::COMM_STEPS as u32 / commute::SPEED_SCALE as u32
+        );
+
         commutation_timer.lock(|timer| {
-            if timer_hz < commute::MIN_COMMUTATE_HZ {
-                timer.update_timeout(commute::MIN_COMMUTATE_HZ.hz());
-                pwm_enable.enable_outputs(false);
-            } else {
-                timer.update_timeout(timer_hz.hz());
-                pwm_enable.enable_outputs(true);
-            }
+            timer.update_timeout(timer_hz.hz());
+            pwm_enable.enable_outputs(motor_state.fets_enabled());
         });
     }
 }
