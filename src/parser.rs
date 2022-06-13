@@ -69,7 +69,11 @@ impl Parser {
                 if usize::from(b) < MAXLENGTH {
                     self.packet.length = b;
                     self.count = 0;
-                    self.state = ParseState::Data;
+                    if self.packet.length == 0 {
+                        self.state = ParseState::Crc1;
+                    } else {
+                        self.state = ParseState::Data;
+                    }
                 } else {
                     self.state = ParseState::Sync1; // Abort
                 }
