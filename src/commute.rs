@@ -15,7 +15,10 @@ pub const SPEED_SCALE: i32 = 100;
 // The counter runs at 48MHz, so the pwm frequency is 48MHz/RELOAD.
 const RELOAD: u32 = 1600;
 // Sets the maximum output duty cycle (i.e. motor voltage)
-const MAXDRIVE: f32 = 0.25;
+const MAXDRIVE: f32 = 0.45;
+// Scale factor to increase motor power with increasing RPM Based initially on KV, but adjusted
+// empirically to achieve constant current over speed
+pub const V_PER_MICRORPS: u32 = 10*128;
 // The minimum speed before the motor is shut off.
 pub const MIN_SPEED: i32 = 35;
 // Sets the delay between turning the FETs on and beginning acceleration. This creates a more
