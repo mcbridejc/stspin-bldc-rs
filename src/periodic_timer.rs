@@ -10,10 +10,13 @@ pub struct PeriodicTimer<TIM> {
     pub tim: TIM
 }
 
+
 macro_rules! create_timer {
     ($($TIM:ident: ($tim:ident, $timXen:ident, $timXrst:ident, $apbenr:ident, $apbrstr:ident),)+) => {
         $(
             use crate::hal::pac::$TIM;
+
+            #[allow(dead_code)]
             impl PeriodicTimer<$TIM> {
                 // XXX(why not name this `new`?) bummer: constructors need to have different names
                 // even if the `$TIM` are non overlapping (compare to the `free` function below

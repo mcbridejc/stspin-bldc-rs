@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![allow(dead_code)]
 
 mod commute;
 mod parser;
@@ -46,6 +47,13 @@ fn read_i32(bytes: &[u8]) -> i32 {
     ((bytes[1] as i32) << 8) +
     ((bytes[2] as i32) << 16) +
     ((bytes[3] as i32) << 24)
+}
+
+fn read_u32(bytes: &[u8]) -> u32 {
+    ((bytes[0] as u32) << 0) +
+    ((bytes[1] as u32) << 8) +
+    ((bytes[2] as u32) << 16) +
+    ((bytes[3] as u32) << 24)
 }
 
 #[entry]
@@ -128,7 +136,7 @@ fn main() -> ! {
         let mut parser = Parser::new();
         let motor_state = unsafe { MOTOR_STATE.assume_init_ref() };
 
-        let mut last_rx_time = monotonic.now();
+        let last_rx_time = monotonic.now();
         loop {
             let expire_time = last_rx_time + 200u32.millis();
             let cur_time = monotonic.now();
@@ -145,6 +153,31 @@ fn main() -> ! {
                             0 => {
                                 let motor_speed = read_i32(&parser.packet.data[0..4]);
                                 motor_state.set_cmd_speed(motor_speed);
+                            },
+                            1 => {
+                                let accel_rate = read_i32(&parser.packet.data[0..4]);
+                                motor_state.set_accel_rate(accel_rate);
+                            },
+                            2 => {
+                                let base_power = read_u32(&parser.packet.data[0..4]);
+                                motor_state.set_base_power(base_power);
+                            },
+                            3 => {
+                                let accel_power = read_u32(&parser.packet.data[0..4]);
+                                motor_state.set_accel_power(accel_power);
+                            },
+                            4 => {
+                                let power_per_microrps = read_u32(&parser.packet.data[0..4]);
+                                motor_state.set_power_per_microrps(power_per_microrps);
+                            },
+                            5 => {
+                                // We are sharing the PWM driver with the TIM14 interrupt here
+                                // We are updating the commutation table. As long as the writes of
+                                // individual sine_table entries are atomic, it is fine, and I believe
+                                // they are because they are < 32 bits. 
+                                let pwm_driver = unsafe { PWM_DRIVER.as_mut().unwrap_unchecked() };
+                                let maxdrive = read_u32(&parser.packet.data[0..4]);
+                                pwm_driver.set_commutation_table(maxdrive as f32 / 1024.);
                             },
                             _ => { hprintln!("Bad packet").unwrap(); }
                         }
@@ -167,9 +200,7 @@ fn TIM14() {
     // into the global before this interrupt is enabled!
     let pwm_driver = unsafe { PWM_DRIVER.as_mut().unwrap_unchecked() };
     let motor_state = unsafe { MOTOR_STATE.assume_init_ref() };
-    let mut power = if motor_state.accelerating() { 72 } else { 50 };
-    power = power + commute::V_PER_MICRORPS * motor_state.cur_speed().abs() as u32 / 1_000_000;
-    power = core::cmp::min(power, 128);
+    let power = motor_state.compute_power();
     let reverse = motor_state.cur_speed() < 0;
     pwm_driver.step(reverse, power);
 }
